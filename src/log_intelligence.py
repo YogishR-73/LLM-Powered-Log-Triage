@@ -17,6 +17,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import platform
 import random
 import re
@@ -229,15 +230,22 @@ def parse_with_format(text: str, fmt: str) -> tuple[str, bool] | None:
         return None
     return utc_isoformat(parsed.replace(tzinfo=timezone.utc)), True
 def parse_epoch(value: float) -> tuple[str, bool] | None:
-    """Parse epoch seconds or milliseconds (auto-detected by magnitude)."""
-    if isinstance(value, bool):
+    """Parse epoch seconds or milliseconds (auto-detected by magnitude).
+
+    Malformed numeric values, infinities, NaN, and values outside datetime's
+    supported range are treated as invalid timestamps rather than leaking a
+    conversion exception into log ingestion.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    seconds = float(value)
-    if seconds > 1e11:  # milliseconds
-        seconds /= 1000.0
     try:
+        seconds = float(value)
+        if not math.isfinite(seconds):
+            return None
+        if seconds > 1e11:  # milliseconds
+            seconds /= 1000.0
         moment = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=seconds)
-    except (OverflowError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     return utc_isoformat(moment), False
 def _finalize(
@@ -675,8 +683,13 @@ def ingest_file(
     config: IngestConfig = IngestConfig(),
     source_name: str | None = None,
 ) -> IngestResult:
-    """Ingest a log file. ``source_name`` defaults to the file's basename so event
-    IDs do not depend on where the file lives on disk."""
+    """Ingest one log file.
+
+    ``source_name`` defaults to the basename so IDs remain stable when a file is
+    moved. When events from multiple files are combined, pass a stable, unique
+    logical source namespace (for example ``cluster-a/app.log``) to avoid ID
+    collisions between files that share a basename, line number, and content.
+    """
     p = Path(path)
     return ingest_lines(read_lines(p, config), source_name or p.name, config)
 def unique_templates(events: Sequence[LogEvent]) -> list[tuple[str, str, int]]:
@@ -812,6 +825,8 @@ def make_embedder(cfg: EmbeddingConfig) -> Embedder:
 # CLUSTERING
 # ============================================================================
 NOISE_CLUSTER_ID = "noise"
+# Distinct from DBSCAN noise: embedding failures are not clustering outcomes.
+UNASSIGNED_CLUSTER_ID = "unassigned"
 class ClusteringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     algorithm: Literal["agglomerative", "kmeans", "dbscan"] = "agglomerative"
@@ -1054,10 +1069,13 @@ def cluster_events(
         except EmbeddingError as exc:
             skipped = f"embedding_failed: {exc}"
             embeddings = np.zeros((len(unit_texts), 0))
-            assignment_ids = tuple("cluster_000" for _ in unit_texts)
+            # Do not fabricate a valid-looking cluster when the embedder failed.
+            assignment_ids = tuple(UNASSIGNED_CLUSTER_ID for _ in unit_texts)
     event_clusters = [assignment_ids[u] for u in event_unit]
     members: dict[str, list[int]] = {}
     for u, cid in enumerate(assignment_ids):
+        if cid == UNASSIGNED_CLUSTER_ID:
+            continue
         members.setdefault(cid, []).append(u)
     summaries = []
     for cid in sorted(members, key=lambda c: (c == NOISE_CLUSTER_ID, c)):
@@ -1093,6 +1111,7 @@ def cluster_events(
         "n_unique_texts": len(unit_texts),
         "n_clusters": len([c for c in members if c != NOISE_CLUSTER_ID]),
         "n_noise_events": sum(1 for c in event_clusters if c == NOISE_CLUSTER_ID),
+        "n_unassigned_events": sum(1 for c in event_clusters if c == UNASSIGNED_CLUSTER_ID),
         "skipped": skipped,
         "clusters": summaries,
         "unit_assignments": [
@@ -1171,7 +1190,7 @@ def run_pipeline(
                     "fraction_labelled": round(labelled_count / len(events), 6) if events else 0.0,
                 },
                 "caveats": [
-                    "Clustering metrics were not computed because embedding failed; the fallback cluster assignment is not an evaluated clustering result.",
+                    "Clustering metrics were not computed because embedding failed; events were marked unassigned rather than assigned to a fabricated cluster.",
                     "Semantic clustering performance is not evidence of root-cause localization.",
                 ],
             }
@@ -1248,6 +1267,17 @@ def run_sweep(
                 }
             )
             clusters, doc, _, _ = cluster_events(result.events, cfg)
+            # Do not calculate/report research metrics when embeddings or input
+            # preparation failed. A fabricated all-in-one cluster can look like a
+            # legitimate result and contaminate the sensitivity analysis.
+            if doc.get("skipped") is not None:
+                rows.append({
+                    "text_field": text_field,
+                    "distance_threshold": th,
+                    "skipped": True,
+                    "skip_reason": doc["skipped"],
+                })
+                continue
             ev = evaluate_events(
                 [e.line_number for e in result.events],
                 clusters,
@@ -1256,7 +1286,12 @@ def run_sweep(
                 seed=cfg.clustering.seed,
             )
             rows.append(
-                {"text_field": text_field, "distance_threshold": th, **ev["clustering"]}
+                {
+                    "text_field": text_field,
+                    "distance_threshold": th,
+                    "skipped": False,
+                    **ev["clustering"],
+                }
             )
     return {"schema_version": SCHEMA_VERSION, "rows": rows}
 # ============================================================================
@@ -1275,6 +1310,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--input", required=True)
     run.add_argument("--out", required=True)
     run.add_argument("--config")
+    run.add_argument(
+        "--source-name",
+        help=("Stable logical source namespace used in event IDs; provide a unique "
+              "value when combining files with the same basename"),
+    )
     run.add_argument("--labels", help="CSV with ground-truth labels (optional)")
     run.add_argument("--label-line-column", default="line_number")
     run.add_argument("--label-column", default="event_id")
@@ -1298,6 +1338,7 @@ def main(argv: list[str] | None = None) -> int:
         labels_path=args.labels,
         label_line_column=args.label_line_column,
         label_column=args.label_column,
+        source_name=args.source_name,
     )
     if args.sweep:
         if not args.labels:
@@ -1305,6 +1346,7 @@ def main(argv: list[str] | None = None) -> int:
         sweep = run_sweep(
             args.input, args.labels, config,
             label_line_column=args.label_line_column, label_column=args.label_column,
+            source_name=args.source_name,
         )
         Path(args.out, "sweep.json").write_text(canonical_json(sweep), encoding="utf-8")
     ing = manifest["ingest"]
@@ -1326,5 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"(template-identity ARI={t['adjusted_rand_index']})"
             )
     return 0
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

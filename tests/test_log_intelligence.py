@@ -7,19 +7,21 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 import numpy as np
-try:  # the evidence layer may not be on the base branch yet
+# Do not swallow arbitrary ImportError here: a broken evidence package must fail CI.
+try:
     from src.evidence import EventStore
 except ImportError:
     EventStore = None
+
 requires_evidence = pytest.mark.skipif(EventStore is None, reason="src.evidence not available")
 from src.log_intelligence import (
-    NOISE_CLUSTER_ID, SEVERITIES, ClusteringConfig, EmbeddingConfig, EmbeddingError,
+    NOISE_CLUSTER_ID, UNASSIGNED_CLUSTER_ID, SEVERITIES, ClusteringConfig, EmbeddingConfig, EmbeddingError,
     IngestConfig, LogEvent, ParseError, PipelineConfig, SentenceTransformerEmbedder,
     build_parsers, cluster_embeddings, config_hash, detect_parser, evaluate_events,
     export_json_schema, extract_template, ingest_file, ingest_lines, load_config,
     load_labels_csv, main, make_embedder, make_event_id, make_template_id,
     nearest_to_centroid, normalize_severity, parse_epoch, parse_iso_like, purity,
-    run_pipeline, score_partition, tokenize_for_embedding,
+    run_pipeline, run_sweep, score_partition, tokenize_for_embedding,
 )
 ROOT = Path(__file__).resolve().parents[1]
 # ----------------------------------------------------------------------
@@ -271,6 +273,16 @@ def test_ids_do_not_depend_on_file_location(tmp_path):
         (tmp_path / d / "app.log").write_text("\n".join(LINES) + "\n", encoding="utf-8")
     ids = [[e.event_id for e in ingest_file(tmp_path / d / "app.log").events] for d in ("x", "y")]
     assert ids[0] == ids[1]
+
+def test_same_basename_files_can_be_separated_by_logical_source_namespace(tmp_path):
+    for d in ("service-a", "service-b"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "app.log").write_text(LINES[0] + "\n", encoding="utf-8")
+    a = ingest_file(tmp_path / "service-a" / "app.log", source_name="service-a/app.log")
+    b = ingest_file(tmp_path / "service-b" / "app.log", source_name="service-b/app.log")
+    assert a.events[0].event_id != b.events[0].event_id
+    assert a.events[0].source_file == "service-a/app.log"
+    assert b.events[0].source_file == "service-b/app.log"
 # ---------------- file reading ----------------
 def test_crlf_files_parse_cleanly(tmp_path):
     p = tmp_path / "w.log"
@@ -478,17 +490,42 @@ def test_all_unparseable_input_does_not_crash(tmp_path):
     src.write_text("nothing\nuseful\n", encoding="utf-8")
     manifest = run_pipeline(src, tmp_path / "o", PipelineConfig())
     assert manifest["ingest"]["n_failures"] == 2 and manifest["ingest"]["n_events"] == 0
-def test_unembeddable_text_degrades_to_single_cluster(tmp_path):
+def test_embedding_failure_marks_events_unassigned_not_as_a_valid_cluster(tmp_path):
     src = tmp_path / "nums.log"
     src.write_text("2026-09-20 10:30:00 [INFO] svc: 123\n2026-09-20 10:30:01 [INFO] svc: 456\n", encoding="utf-8")
     run_pipeline(src, tmp_path / "o", PipelineConfig())
     clusters = json.loads((tmp_path / "o" / "clusters.json").read_text(encoding="utf-8"))
-    assert clusters["skipped"].startswith("embedding_failed") and clusters["n_clusters"] == 1
+    assignments = read_jsonl(tmp_path / "o" / "event_clusters.jsonl")
+    assert clusters["skipped"].startswith("embedding_failed")
+    assert clusters["n_clusters"] == 0
+    assert clusters["n_unassigned_events"] == 2
+    assert clusters["clusters"] == []
+    assert {row["cluster_id"] for row in assignments} == {UNASSIGNED_CLUSTER_ID}
+def test_rerun_without_labels_removes_stale_evaluation(tmp_path):
+    src = tmp_path / "app.log"
+    src.write_text(SYNTH, encoding="utf-8")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("line_number,event_id\n1,A\n2,A\n3,B\n5,B\n6,C\n", encoding="utf-8")
+    out = tmp_path / "out"
+    run_pipeline(src, out, PipelineConfig(), labels_path=labels)
+    assert (out / "evaluation.json").exists()
+    run_pipeline(src, out, PipelineConfig())
+    assert not (out / "evaluation.json").exists()
+
 def test_message_text_field_supported(tmp_path):
     src = tmp_path / "app.log"
     src.write_text(SYNTH, encoding="utf-8")
     m = run_pipeline(src, tmp_path / "o", PipelineConfig(text_field="message"))
     assert m["n_clusters"] >= 1
+def test_cli_accepts_logical_source_name(tmp_path, capsys):
+    src = tmp_path / "app.log"
+    src.write_text(SYNTH, encoding="utf-8")
+    out = tmp_path / "out"
+    assert main(["run", "--input", str(src), "--out", str(out), "--source-name", "checkout/app.log"]) == 0
+    _ = capsys.readouterr()
+    events = read_jsonl(out / "events.jsonl")
+    assert events and all(e["source_file"] == "checkout/app.log" for e in events)
+
 def test_yaml_config_loading(tmp_path):
     cfg = tmp_path / "c.yaml"
     cfg.write_text("clustering:\n  distance_threshold: 0.3\ntext_field: message\n", encoding="utf-8")
@@ -523,3 +560,45 @@ def test_hdfs_2k_raw_lines_to_events_to_semantic_groups(tmp_path):
     assert ev["baselines"]["shuffled_assignments"]["adjusted_rand_index"] < 0.05
     # Not a root-cause claim: the evaluation must carry its own caveats.
     assert any("root cause" in c for c in ev["caveats"])
+
+
+def test_run_sweep_marks_embedding_failure_as_skipped_without_metrics(tmp_path, monkeypatch):
+    import src.log_intelligence as module
+
+    source = tmp_path / "app.log"
+    source.write_text(
+        "2026-09-20 10:30:00 [ERROR] database: Connection timed out\n"
+        "2026-09-20 10:30:01 [ERROR] checkout: Request failed\n",
+        encoding="utf-8",
+    )
+    labels = tmp_path / "labels.csv"
+    labels.write_text("line_number,event_id\n1,incident-a\n2,incident-a\n", encoding="utf-8")
+
+    class FailingEmbedder:
+        def embed(self, texts):
+            raise EmbeddingError("forced regression-test failure")
+
+        def describe(self):
+            return {"backend": "forced-failure-test"}
+
+    monkeypatch.setattr(module, "make_embedder", lambda _config: FailingEmbedder())
+    monkeypatch.setattr(
+        module,
+        "evaluate_events",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("evaluation must not run after embedding failure")
+        ),
+    )
+    result = run_sweep(
+        source,
+        labels,
+        PipelineConfig(ingest=IngestConfig(parser="project")),
+        thresholds=(0.5,),
+        text_fields=("template",),
+    )
+    assert len(result["rows"]) == 1
+    row = result["rows"][0]
+    assert row["skipped"] is True
+    assert row["skip_reason"].startswith("embedding_failed:")
+    assert "adjusted_rand_index" not in row
+    assert "purity" not in row
