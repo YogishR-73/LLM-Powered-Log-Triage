@@ -74,13 +74,53 @@ def test_semantic_clustering_availability_requires_success_status_and_metrics() 
         "v_measure": 0.755,
         "purity": 0.9,
     }
-    assert _semantic_clustering_available({"status": "completed", "clustering": metrics}) is True
-    assert _semantic_clustering_available({"status": "skipped", "clustering": metrics}) is False
-    assert _semantic_clustering_available({"status": "running", "clustering": metrics}) is False
+
+    assert (
+        _semantic_clustering_available(
+            {"status": "completed", "clustering": metrics}
+        )
+        is True
+    )
+    assert (
+        _semantic_clustering_available(
+            {"status": "skipped", "clustering": metrics}
+        )
+        is False
+    )
+    assert (
+        _semantic_clustering_available(
+            {"status": "running", "clustering": metrics}
+        )
+        is False
+    )
     assert _semantic_clustering_available({"clustering": metrics}) is False
-    assert _semantic_clustering_available({"status": "completed", "clustering": {"adjusted_rand_index": 0.7}}) is False
+
+    assert (
+        _semantic_clustering_available(
+            {
+                "status": "completed",
+                "clustering": {"adjusted_rand_index": 0.7},
+            }
+        )
+        is False
+    )
+
     invalid = {**metrics, "purity": None}
-    assert _semantic_clustering_available({"status": "completed", "clustering": invalid}) is False
+    assert (
+        _semantic_clustering_available(
+            {"status": "completed", "clustering": invalid}
+        )
+        is False
+    )
+
+    # Extremely large integers must be rejected without raising an exception.
+    oversized_integer = {**metrics, "purity": 10**1000}
+    assert (
+        _semantic_clustering_available(
+            {"status": "completed", "clustering": oversized_integer}
+        )
+        is False
+    )
 
 
 def test_runner_marks_semantic_clustering_available_only_for_successful_labelled_evaluation(

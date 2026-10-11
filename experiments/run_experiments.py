@@ -19,6 +19,7 @@ import os
 import platform
 import subprocess
 import sys
+import math
 import time
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
@@ -99,13 +100,16 @@ def _dependency_provenance(repo_root: Path) -> dict[str, Any]:
     }
 
 
+
 def _semantic_clustering_available(evaluation: Any) -> bool:
-    """Require an explicit successful status and complete numeric cluster metrics."""
+    """Require successful evaluation and complete finite numeric metrics."""
     if not isinstance(evaluation, dict) or evaluation.get("status") != "completed":
         return False
+
     clustering = evaluation.get("clustering")
     if not isinstance(clustering, dict):
         return False
+
     expected_metrics = (
         "adjusted_rand_index",
         "normalized_mutual_info",
@@ -114,13 +118,23 @@ def _semantic_clustering_available(evaluation: Any) -> bool:
         "v_measure",
         "purity",
     )
+
     for metric in expected_metrics:
         value = clustering.get(metric)
+
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
-        if not np.isfinite(value):
+
+        try:
+            numeric_value = float(value)
+        except (OverflowError, ValueError):
             return False
+
+        if not math.isfinite(numeric_value):
+            return False
+
     return True
+
 
 def _git_commit(root: Path) -> str | None:
     try:
