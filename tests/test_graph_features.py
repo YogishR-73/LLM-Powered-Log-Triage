@@ -41,3 +41,41 @@ def test_propagation_features_are_extracted():
     assert features[0]["target_service"] == "payment"
     assert features[0]["propagation_delay_seconds"] == 3.0
     assert features[0]["hop_count"] == 1
+
+
+
+def test_temporal_features_reject_invalid_and_unrepresentably_large_deltas():
+    import pytest
+    for delta in (-1, float("nan"), float("inf"), True, "2", 10**10000):
+        graph = nx.DiGraph()
+        graph.add_edge("a", "b", time_delta_seconds=delta)
+        with pytest.raises(ValueError, match="time_delta_seconds"):
+            extract_temporal_features(graph)
+
+
+def test_temporal_features_require_directed_graph():
+    import pytest
+    graph = nx.Graph()
+    graph.add_edge("a", "b", time_delta_seconds=1)
+    with pytest.raises(ValueError, match="directed"):
+        extract_temporal_features(graph)
+
+
+def test_dependency_features_require_directed_graph():
+    import pytest
+    graph = nx.Graph()
+    graph.add_edge("api", "database")
+    with pytest.raises(ValueError, match="directed"):
+        extract_dependency_features(graph)
+
+
+def test_propagation_features_reject_invalid_delta_and_large_integer():
+    import pytest
+    for delta in (-1, float("nan"), float("inf"), True, 10**10000):
+        with pytest.raises(ValueError, match="time_delta_seconds"):
+            extract_propagation_features([{
+                "source_service": "database",
+                "target_service": "payment",
+                "time_delta_seconds": delta,
+                "hop_count": 1,
+            }])

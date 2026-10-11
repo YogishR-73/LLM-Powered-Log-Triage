@@ -116,3 +116,40 @@ def test_max_hops_limits_actual_dependency_path_length():
     assert len(paths) == 1
     assert paths[0]["hop_count"] == 2
     assert paths[0]["dependency_path"] == ["database", "payment", "api"]
+
+
+
+def test_propagation_rejects_undirected_graphs():
+    import pytest
+    temporal = nx.Graph()
+    temporal.add_edge("E0", "E1", time_delta_seconds=1)
+    dependencies = nx.DiGraph()
+    with pytest.raises(ValueError, match="temporal_graph must be a directed"):
+        PropagationAnalyzer(temporal, dependencies).find_propagation_paths()
+
+    temporal = nx.DiGraph()
+    dependencies = nx.Graph()
+    with pytest.raises(ValueError, match="dependency_graph must be a directed"):
+        PropagationAnalyzer(temporal, dependencies).find_propagation_paths()
+
+
+def test_propagation_rejects_invalid_deltas_even_without_matching_dependency():
+    import pytest
+    temporal = nx.DiGraph()
+    temporal.add_node("E0", service="unrelated-a")
+    temporal.add_node("E1", service="unrelated-b")
+    temporal.add_edge("E0", "E1", time_delta_seconds=float("nan"))
+    with pytest.raises(ValueError, match="invalid time_delta_seconds"):
+        PropagationAnalyzer(temporal, nx.DiGraph()).find_propagation_paths()
+
+
+def test_propagation_rejects_unrepresentably_large_integer_delta():
+    import pytest
+    temporal = nx.DiGraph()
+    temporal.add_node("E0", service="database")
+    temporal.add_node("E1", service="payment")
+    temporal.add_edge("E0", "E1", time_delta_seconds=10**10000)
+    dependencies = nx.DiGraph()
+    dependencies.add_edge("payment", "database")
+    with pytest.raises(ValueError, match="invalid time_delta_seconds"):
+        PropagationAnalyzer(temporal, dependencies).find_propagation_paths()
