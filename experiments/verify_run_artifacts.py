@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -21,14 +21,44 @@ def _sha256_file(path: Path) -> str:
 
 
 def _safe_artifact_path(root: Path, name: str) -> Path:
-    if not isinstance(name, str) or not name or Path(name).is_absolute():
+    # Manifests may move between Windows and POSIX systems. Reject absolute
+    # paths and traversal in either path syntax, regardless of host OS.
+    if not isinstance(name, str) or not name:
         raise ValueError(f"invalid artifact name in manifest: {name!r}")
-    candidate = (root / name).resolve()
+    windows_path = PureWindowsPath(name)
+    posix_path = PurePosixPath(name)
+    if (
+        Path(name).is_absolute()
+        or posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ".." in posix_path.parts
+        or ".." in windows_path.parts
+    ):
+        raise ValueError(f"invalid artifact name in manifest: {name!r}")
+    # Treat Windows separators as separators even when verifying on POSIX.
+    portable_name = name.replace("\\", "/")
+    candidate = (root / portable_name).resolve()
     try:
         candidate.relative_to(root.resolve())
     except ValueError as exc:
         raise ValueError(f"artifact path escapes run directory: {name!r}") from exc
     return candidate
+
+
+def _read_manifest(path: Path) -> dict[str, Any]:
+    """Load a manifest and reject valid JSON values that are not JSON objects."""
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path.name} is not valid UTF-8") from exc
+    try:
+        value = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path.name} is not valid JSON: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain a top-level JSON object")
+    return value
 
 
 def _verify_hash_map(root: Path, hash_map: Any, manifest_name: str) -> list[dict[str, Any]]:
@@ -64,14 +94,14 @@ def verify_run_dir(run_dir: str | Path) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     run_manifest_path = root / "run_manifest.json"
     if run_manifest_path.is_file():
-        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        run_manifest = _read_manifest(run_manifest_path)
         checks.extend(_verify_hash_map(root, run_manifest.get("artifacts"), "run_manifest.json"))
     else:
         checks.append({"artifact": "run_manifest.json", "status": "missing_manifest"})
 
     experiment_manifest_path = root / "experiment_manifest.json"
     if experiment_manifest_path.is_file():
-        experiment_manifest = json.loads(experiment_manifest_path.read_text(encoding="utf-8"))
+        experiment_manifest = _read_manifest(experiment_manifest_path)
         checks.extend(_verify_hash_map(root, experiment_manifest.get("artifacts"), "experiment_manifest.json"))
     else:
         checks.append({"artifact": "experiment_manifest.json", "status": "missing_manifest"})

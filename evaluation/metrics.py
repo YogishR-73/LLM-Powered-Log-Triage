@@ -174,7 +174,7 @@ def package_validity_summary(valid_flags: Sequence[bool]) -> dict[str, Any]:
 
 
 def evidence_package_integrity(
-    packages: Sequence[Any], known_event_ids: Iterable[str]
+    packages: Iterable[Any], known_event_ids: Iterable[str]
 ) -> dict[str, Any]:
     """Validate evidence packages and measure ID references against the event store.
 
@@ -189,6 +189,11 @@ def evidence_package_integrity(
     from pydantic import ValidationError
     from src.evidence.schemas import EvidencePackage
 
+    if isinstance(packages, (str, bytes)):
+        raise TypeError("packages must be an iterable of packages, not a single string")
+    if isinstance(known_event_ids, (str, bytes)):
+        raise TypeError("known_event_ids must be an iterable of IDs, not a single string")
+    package_values = list(packages)
     known = set(_string_sequence(list(known_event_ids), "known_event_ids"))
     valid_packages = 0
     schema_valid_package_refs: list[str] = []
@@ -197,7 +202,7 @@ def evidence_package_integrity(
     package_reference_status: list[bool] = []
     unknown_ids: set[str] = set()
 
-    for item in packages:
+    for item in package_values:
         try:
             package = item if isinstance(item, EvidencePackage) else EvidencePackage.model_validate(item)
         except (ValidationError, TypeError, ValueError):
@@ -231,7 +236,7 @@ def evidence_package_integrity(
         unknown_ids.update(missing)
         package_reference_status.append(not missing)
 
-    package_count = len(packages)
+    package_count = len(package_values)
     # Duplicate signatures preserve direction, candidate scope, type, polarity and
     # relation text. An intentional opposing-polarity item is not a duplicate.
     relationship_counts = Counter(relationships)
@@ -345,7 +350,10 @@ def latency_summary_ms(samples_ms: Sequence[float]) -> dict[str, Any]:
     for index, value in enumerate(samples):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"samples_ms[{index}] must be numeric")
-        number = float(value)
+        try:
+            number = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(f"samples_ms[{index}] must be finite and non-negative") from exc
         if not math.isfinite(number) or number < 0:
             raise ValueError(f"samples_ms[{index}] must be finite and non-negative")
         numeric.append(number)

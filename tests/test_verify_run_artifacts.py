@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import hashlib
@@ -9,8 +10,13 @@ import pytest
 from experiments.verify_run_artifacts import main as verify_main, verify_run_dir
 
 
-def _write_manifest(path: Path, artifacts: dict[str, str] | list | None = None) -> None:
-    payload = {"schema_version": 1, "artifacts": artifacts if artifacts is not None else {}}
+def _write_manifest(
+    path: Path, artifacts: dict[str, str] | list | None = None
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "artifacts": artifacts if artifacts is not None else {},
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -105,8 +111,18 @@ def test_verifier_rejects_non_utf8_manifest(tmp_path: Path) -> None:
         verify_run_dir(run_dir)
 
 
-@pytest.mark.parametrize("unsafe_name", ["../outside.txt", r"..\outside.txt", r"C:\temp\outside.txt", r"\\server\share\outside.txt"])
-def test_verifier_rejects_cross_platform_unsafe_paths(tmp_path: Path, unsafe_name: str) -> None:
+@pytest.mark.parametrize(
+    "unsafe_name",
+    [
+        r"..\outside.txt",
+        r"C:\temp\outside.txt",
+        r"\\server\share\file.txt",
+        "../outside.txt",
+    ],
+)
+def test_verifier_rejects_cross_platform_unsafe_paths(
+    tmp_path: Path, unsafe_name: str
+) -> None:
     run_dir = _valid_run_dir(tmp_path)
     _write_manifest(run_dir / "run_manifest.json", {unsafe_name: "a" * 64})
 
@@ -127,6 +143,9 @@ def test_verifier_cli_reports_valid_json_with_wrong_top_level_type_cleanly(
 
     assert exit_info.value.code == 2
     captured = capsys.readouterr()
-    assert "experiment_manifest.json must contain a top-level JSON object" in captured.err
+    assert (
+        "experiment_manifest.json must contain a top-level JSON object"
+        in captured.err
+    )
     assert "AttributeError" not in captured.err
     assert "Traceback" not in captured.err

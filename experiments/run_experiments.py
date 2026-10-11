@@ -14,12 +14,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import os
 import platform
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,88 @@ def _sha256_file(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+
+
+def _normalise_distribution_name(name: str) -> str:
+    """Normalise distribution names for stable metadata keys."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _installed_distributions() -> dict[str, str]:
+    """Return all installed distribution versions visible to this interpreter."""
+    installed: dict[str, str] = {}
+    for distribution in importlib_metadata.distributions():
+        name = distribution.metadata.get("Name")
+        version = distribution.version
+        if name and version:
+            installed[_normalise_distribution_name(name)] = version
+    return dict(sorted(installed.items()))
+
+
+def _dependency_provenance(repo_root: Path) -> dict[str, Any]:
+    """Record requirements/lockfile hashes and clarify the environment snapshot."""
+    requirements_path = repo_root / "requirements.txt"
+    lock_candidates = (
+        "requirements.lock",
+        "requirements-lock.txt",
+        "constraints.txt",
+        "constraints/requirements.txt",
+        "poetry.lock",
+        "uv.lock",
+        "Pipfile.lock",
+        "conda-lock.yml",
+    )
+    lockfiles = []
+    for relative_name in lock_candidates:
+        path = repo_root / relative_name
+        if path.is_file():
+            lockfiles.append({"path": relative_name, "sha256": _sha256_file(path)})
+
+    distributions = _installed_distributions()
+    distribution_payload = json.dumps(
+        distributions, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return {
+        "requirements_file": {
+            "path": "requirements.txt",
+            "present": requirements_path.is_file(),
+            "sha256": _sha256_file(requirements_path) if requirements_path.is_file() else None,
+            "meaning": "Hash identifies the repository's declared requirement ranges; it is not a resolved lockfile.",
+        },
+        "lockfiles": lockfiles,
+        "lockfile_found": bool(lockfiles),
+        "installed_distributions_scope": (
+            "All Python distributions visible to importlib.metadata in the active interpreter. "
+            "This may include unrelated environment packages and is an environment snapshot, not a lockfile."
+        ),
+        "installed_distributions": distributions,
+        "installed_distributions_sha256": hashlib.sha256(distribution_payload).hexdigest(),
+        "versions_captured": sorted(distributions),
+    }
+
+
+def _semantic_clustering_available(evaluation: Any) -> bool:
+    """Require an explicit successful status and complete numeric cluster metrics."""
+    if not isinstance(evaluation, dict) or evaluation.get("status") != "completed":
+        return False
+    clustering = evaluation.get("clustering")
+    if not isinstance(clustering, dict):
+        return False
+    expected_metrics = (
+        "adjusted_rand_index",
+        "normalized_mutual_info",
+        "homogeneity",
+        "completeness",
+        "v_measure",
+        "purity",
+    )
+    for metric in expected_metrics:
+        value = clustering.get(metric)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if not np.isfinite(value):
+            return False
+    return True
 
 def _git_commit(root: Path) -> str | None:
     try:
@@ -56,8 +140,11 @@ def _git_commit(root: Path) -> str | None:
 def _load_config(path: Path | None) -> PipelineConfig:
     if path is None:
         return PipelineConfig()
-    with path.open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML config {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError("config file must contain a YAML object")
     return PipelineConfig.model_validate(raw)
@@ -92,10 +179,19 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
+    
+	
     eval_path = out_dir / "evaluation.json"
     evaluation: dict[str, Any] | None = None
     if eval_path.is_file():
         evaluation = json.loads(eval_path.read_text(encoding="utf-8"))
+        if isinstance(evaluation, dict) and "status" not in evaluation:
+            evaluation = {
+                **evaluation,
+                "status": "completed",
+            }
+
+
 
     experiment = {
         "schema_version": 1,
@@ -137,12 +233,13 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             "python_executable_basename": Path(sys.executable).name,
             "os_name": os.name,
         },
+        "dependency_provenance": _dependency_provenance(repo_root),
         "runtime": {"pipeline_wall_time_ms": round(elapsed_ms, 3)},
         "pipeline_manifest": pipeline_manifest,
         "evaluation": evaluation,
         "measured_metrics_available": {
             "ingestion_accounting": True,
-            "semantic_clustering": bool(evaluation and evaluation.get("status") != "skipped"),
+            "semantic_clustering": _semantic_clustering_available(evaluation),
             "evidence_integrity": False,
             "rca_ranking": False,
             "llm_tokens_and_cost": False,
