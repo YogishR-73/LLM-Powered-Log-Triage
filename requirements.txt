@@ -1,7 +1,7 @@
 
 # ============================================================
 # Evidence-Grounded LLM Log Triage
-# Python 3.12+
+# Supported Python: 3.10-3.12 (CI currently runs Python 3.12)
 # ============================================================
 
 # -------------------------
@@ -99,7 +99,7 @@ statsmodels>=0.14,<1.0
 # -------------------------
 # Evaluation
 # -------------------------
-scikit-learn>=1.5,<2.0
+# scikit-learn is declared above under Machine Learning.
 
 # Optional NLP evaluation
 # Uncomment if used:
