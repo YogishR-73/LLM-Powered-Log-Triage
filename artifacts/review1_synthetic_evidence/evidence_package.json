@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "incident_id": "SYNTHETIC-INCIDENT-001",
+  "candidates": [
+    {
+      "candidate_event_id": "evt_0000000000000001",
+      "candidate": {
+        "event_id": "evt_0000000000000001",
+        "timestamp_iso": "2026-10-08T10:00:00+00:00",
+        "severity": "ERROR",
+        "service": "database",
+        "message": "connection pool exhausted",
+        "template": "connection pool exhausted",
+        "source_file": "synthetic_incident.log",
+        "line_number": 1
+      },
+      "supporting_events": [
+        "evt_0000000000000003"
+      ],
+      "contradicting_events": [
+        "evt_0000000000000002"
+      ],
+      "evidence_items": [
+        {
+          "candidate_event_id": "evt_0000000000000001",
+          "event_id": "evt_0000000000000003",
+          "source_event_id": "evt_0000000000000003",
+          "target_event_id": "evt_0000000000000001",
+          "evidence_type": "dependency",
+          "polarity": "supporting",
+          "score": 0.91,
+          "relation": "service_dependency",
+          "reason": "The checkout service depends on the database, and the database logged pool exhaustion before the checkout timeout. This supports the database error as an upstream-cause candidate in this synthetic case.",
+          "metadata": {
+            "dependency_direction": "source_service_depends_on_target_service",
+            "dependency_service": "database",
+            "graph_relationship": "service_dependency",
+            "source_service": "checkout"
+          }
+        },
+        {
+          "candidate_event_id": "evt_0000000000000001",
+          "event_id": "evt_0000000000000002",
+          "source_event_id": "evt_0000000000000001",
+          "target_event_id": "evt_0000000000000002",
+          "evidence_type": "temporal",
+          "polarity": "contradicting",
+          "score": 0.62,
+          "relation": "temporal_precedence",
+          "reason": "The database health probe succeeded immediately after the pool-exhaustion error. This is counterevidence to a sustained database-unavailable hypothesis, though it does not rule out an intermittent database problem.",
+          "metadata": {
+            "graph_relationship": "temporal_precedence",
+            "time_delta_seconds": 1.0
+          }
+        }
+      ],
+      "temporal_score": null,
+      "semantic_score": null,
+      "dependency_score": 0.91,
+      "severity_score": 0.95,
+      "contradiction_score": 0.62
+    },
+    {
+      "candidate_event_id": "evt_0000000000000003",
+      "candidate": {
+        "event_id": "evt_0000000000000003",
+        "timestamp_iso": "2026-10-08T10:00:02+00:00",
+        "severity": "ERROR",
+        "service": "checkout",
+        "message": "checkout request timed out",
+        "template": "checkout request timed out",
+        "source_file": "synthetic_incident.log",
+        "line_number": 3
+      },
+      "supporting_events": [
+        "evt_0000000000000004"
+      ],
+      "contradicting_events": [
+        "evt_0000000000000001"
+      ],
+      "evidence_items": [
+        {
+          "candidate_event_id": "evt_0000000000000003",
+          "event_id": "evt_0000000000000004",
+          "source_event_id": "evt_0000000000000003",
+          "target_event_id": "evt_0000000000000004",
+          "evidence_type": "temporal",
+          "polarity": "supporting",
+          "score": 0.88,
+          "relation": "temporal_precedence",
+          "reason": "The checkout timeout precedes the payment failure, whose message explicitly reports failure after the timeout.",
+          "metadata": {
+            "graph_relationship": "temporal_precedence",
+            "time_delta_seconds": 1.0
+          }
+        },
+        {
+          "candidate_event_id": "evt_0000000000000003",
+          "event_id": "evt_0000000000000001",
+          "source_event_id": "evt_0000000000000003",
+          "target_event_id": "evt_0000000000000001",
+          "evidence_type": "dependency",
+          "polarity": "contradicting",
+          "score": 0.91,
+          "relation": "service_dependency",
+          "reason": "The database pool-exhaustion error occurs in a service that the checkout service depends on, making the checkout timeout less plausible as the initiating root-cause event.",
+          "metadata": {
+            "dependency_direction": "source_service_depends_on_target_service",
+            "dependency_service": "database",
+            "graph_relationship": "service_dependency",
+            "source_service": "checkout"
+          }
+        }
+      ],
+      "temporal_score": 0.88,
+      "semantic_score": null,
+      "dependency_score": null,
+      "severity_score": 0.85,
+      "contradiction_score": 0.91
+    }
+  ]
+}
