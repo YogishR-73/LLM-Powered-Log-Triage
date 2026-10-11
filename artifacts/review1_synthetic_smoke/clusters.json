@@ -1,0 +1,249 @@
+{
+  "clustering": {
+    "algorithm": "agglomerative",
+    "distance_threshold": 0.5,
+    "eps": 0.3,
+    "linkage": "average",
+    "min_samples": 2,
+    "n_clusters": null,
+    "seed": 0
+  },
+  "clusters": [
+    {
+      "cluster_id": "cluster_000",
+      "example_event_ids": [
+        "evt_da757451cd74e4c9",
+        "evt_e98d40a6f8fca06e"
+      ],
+      "first_timestamp": "2026-10-11T10:00:00+00:00",
+      "last_timestamp": "2026-10-11T10:00:07+00:00",
+      "n_events": 2,
+      "n_unique_texts": 2,
+      "representative_text": "Connection pool exhausted",
+      "services": {
+        "database": 2
+      },
+      "severities": {
+        "ERROR": 1,
+        "INFO": 1
+      },
+      "template_ids": [
+        "tpl_1776755afc50",
+        "tpl_3cf421a8b3b6"
+      ]
+    },
+    {
+      "cluster_id": "cluster_001",
+      "example_event_ids": [
+        "evt_2eb5b418c4ff31a4",
+        "evt_b66d99761d15a757"
+      ],
+      "first_timestamp": "2026-10-11T10:00:05+00:00",
+      "last_timestamp": "2026-10-11T10:00:09+00:00",
+      "n_events": 2,
+      "n_unique_texts": 2,
+      "representative_text": "Payment authorization request timed out",
+      "services": {
+        "payment": 2
+      },
+      "severities": {
+        "ERROR": 1,
+        "INFO": 1
+      },
+      "template_ids": [
+        "tpl_2e88097e65d5",
+        "tpl_8b1a60ef2d96"
+      ]
+    },
+    {
+      "cluster_id": "cluster_002",
+      "example_event_ids": [
+        "evt_535c80142843d7b2"
+      ],
+      "first_timestamp": "2026-10-11T10:00:01+00:00",
+      "last_timestamp": "2026-10-11T10:00:01+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Retry attempt <*> failed",
+      "services": {
+        "database": 1
+      },
+      "severities": {
+        "WARN": 1
+      },
+      "template_ids": [
+        "tpl_00dcfdd68f10"
+      ]
+    },
+    {
+      "cluster_id": "cluster_003",
+      "example_event_ids": [
+        "evt_1a6391d2861556d6"
+      ],
+      "first_timestamp": "2026-10-11T10:00:02+00:00",
+      "last_timestamp": "2026-10-11T10:00:02+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Health probe succeeded",
+      "services": {
+        "database": 1
+      },
+      "severities": {
+        "INFO": 1
+      },
+      "template_ids": [
+        "tpl_ece53e442bec"
+      ]
+    },
+    {
+      "cluster_id": "cluster_004",
+      "example_event_ids": [
+        "evt_819d23131b20d5b2"
+      ],
+      "first_timestamp": "2026-10-11T10:00:03+00:00",
+      "last_timestamp": "2026-10-11T10:00:03+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Request to database timed out",
+      "services": {
+        "checkout": 1
+      },
+      "severities": {
+        "ERROR": 1
+      },
+      "template_ids": [
+        "tpl_7e0d3733ec65"
+      ]
+    },
+    {
+      "cluster_id": "cluster_005",
+      "example_event_ids": [
+        "evt_293067ec55ed5a5a"
+      ],
+      "first_timestamp": "2026-10-11T10:00:04+00:00",
+      "last_timestamp": "2026-10-11T10:00:04+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Checkout request failed",
+      "services": {
+        "checkout": 1
+      },
+      "severities": {
+        "ERROR": 1
+      },
+      "template_ids": [
+        "tpl_aa7b9ab9d127"
+      ]
+    },
+    {
+      "cluster_id": "cluster_006",
+      "example_event_ids": [
+        "evt_722dbb99f3cbee43"
+      ],
+      "first_timestamp": "2026-10-11T10:00:06+00:00",
+      "last_timestamp": "2026-10-11T10:00:06+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Elevated checkout latency detected",
+      "services": {
+        "api": 1
+      },
+      "severities": {
+        "WARN": 1
+      },
+      "template_ids": [
+        "tpl_c0df21ad0746"
+      ]
+    },
+    {
+      "cluster_id": "cluster_007",
+      "example_event_ids": [
+        "evt_9748418e3b8e49b7"
+      ],
+      "first_timestamp": "2026-10-11T10:00:08+00:00",
+      "last_timestamp": "2026-10-11T10:00:08+00:00",
+      "n_events": 1,
+      "n_unique_texts": 1,
+      "representative_text": "Request completed successfully",
+      "services": {
+        "checkout": 1
+      },
+      "severities": {
+        "INFO": 1
+      },
+      "template_ids": [
+        "tpl_fa7090413b99"
+      ]
+    }
+  ],
+  "embedder": {
+    "backend": "tfidf_svd",
+    "dim": 32,
+    "min_df": 1,
+    "ngram_range": [
+      1,
+      2
+    ],
+    "seed": 0
+  },
+  "n_clusters": 8,
+  "n_events": 10,
+  "n_noise_events": 0,
+  "n_unassigned_events": 0,
+  "n_unique_texts": 10,
+  "schema_version": 1,
+  "skipped": null,
+  "text_field": "template",
+  "unit_assignments": [
+    {
+      "cluster_id": "cluster_000",
+      "n_events": 1,
+      "text": "Connection pool exhausted"
+    },
+    {
+      "cluster_id": "cluster_002",
+      "n_events": 1,
+      "text": "Retry attempt <*> failed"
+    },
+    {
+      "cluster_id": "cluster_003",
+      "n_events": 1,
+      "text": "Health probe succeeded"
+    },
+    {
+      "cluster_id": "cluster_004",
+      "n_events": 1,
+      "text": "Request to database timed out"
+    },
+    {
+      "cluster_id": "cluster_005",
+      "n_events": 1,
+      "text": "Checkout request failed"
+    },
+    {
+      "cluster_id": "cluster_001",
+      "n_events": 1,
+      "text": "Payment authorization request timed out"
+    },
+    {
+      "cluster_id": "cluster_006",
+      "n_events": 1,
+      "text": "Elevated checkout latency detected"
+    },
+    {
+      "cluster_id": "cluster_000",
+      "n_events": 1,
+      "text": "Connection pool recovered"
+    },
+    {
+      "cluster_id": "cluster_007",
+      "n_events": 1,
+      "text": "Request completed successfully"
+    },
+    {
+      "cluster_id": "cluster_001",
+      "n_events": 1,
+      "text": "Payment authorization completed"
+    }
+  ]
+}

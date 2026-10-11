@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "templates": [
+    {
+      "cluster_ids": [
+        "cluster_000"
+      ],
+      "n_events": 1,
+      "template": "Connection pool exhausted",
+      "template_id": "tpl_3cf421a8b3b6"
+    },
+    {
+      "cluster_ids": [
+        "cluster_002"
+      ],
+      "n_events": 1,
+      "template": "Retry attempt <*> failed",
+      "template_id": "tpl_00dcfdd68f10"
+    },
+    {
+      "cluster_ids": [
+        "cluster_003"
+      ],
+      "n_events": 1,
+      "template": "Health probe succeeded",
+      "template_id": "tpl_ece53e442bec"
+    },
+    {
+      "cluster_ids": [
+        "cluster_004"
+      ],
+      "n_events": 1,
+      "template": "Request to database timed out",
+      "template_id": "tpl_7e0d3733ec65"
+    },
+    {
+      "cluster_ids": [
+        "cluster_005"
+      ],
+      "n_events": 1,
+      "template": "Checkout request failed",
+      "template_id": "tpl_aa7b9ab9d127"
+    },
+    {
+      "cluster_ids": [
+        "cluster_001"
+      ],
+      "n_events": 1,
+      "template": "Payment authorization request timed out",
+      "template_id": "tpl_2e88097e65d5"
+    },
+    {
+      "cluster_ids": [
+        "cluster_006"
+      ],
+      "n_events": 1,
+      "template": "Elevated checkout latency detected",
+      "template_id": "tpl_c0df21ad0746"
+    },
+    {
+      "cluster_ids": [
+        "cluster_000"
+      ],
+      "n_events": 1,
+      "template": "Connection pool recovered",
+      "template_id": "tpl_1776755afc50"
+    },
+    {
+      "cluster_ids": [
+        "cluster_007"
+      ],
+      "n_events": 1,
+      "template": "Request completed successfully",
+      "template_id": "tpl_fa7090413b99"
+    },
+    {
+      "cluster_ids": [
+        "cluster_001"
+      ],
+      "n_events": 1,
+      "template": "Payment authorization completed",
+      "template_id": "tpl_8b1a60ef2d96"
+    }
+  ]
+}

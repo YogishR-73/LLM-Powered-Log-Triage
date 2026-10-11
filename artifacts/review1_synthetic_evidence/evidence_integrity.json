@@ -1,0 +1,32 @@
+{
+  "created_at_utc": "2026-10-11T09:31:54.418414+00:00",
+  "inputs": {
+    "events_filename": "synthetic_evidence_events.jsonl",
+    "events_sha256": "3cf24a3ec217e546b5a0262a3ce580fdbf003e5125c591dfb6f7f4729449dfa1",
+    "n_known_events": 4,
+    "package_filename": "evidence_package.json",
+    "package_sha256": "374a4850b9136e6367eb500391cda772695af64cd42c04ea1894aef5ec077d38"
+  },
+  "metrics": {
+    "duplicate_relationship_rate": 0.0,
+    "event_references": {
+      "n_invalid_references": 0,
+      "n_references": 24,
+      "n_valid_references": 24,
+      "unknown_or_invalid_event_ids": [],
+      "valid_event_reference_rate": 1.0
+    },
+    "n_duplicate_relationship_occurrences": 0,
+    "n_packages_evaluated": 1,
+    "n_packages_with_all_event_ids_in_store": 1,
+    "n_relationship_records": 4,
+    "n_schema_invalid_packages": 0,
+    "n_schema_valid_packages": 1,
+    "package_store_reference_rate": 1.0,
+    "schema_valid_package_rate": 1.0,
+    "unknown_event_ids": [],
+    "validation_error_types": {}
+  },
+  "schema_version": 1,
+  "scope_note": "Schema and event-reference integrity only; not evidence truth or RCA accuracy."
+}
