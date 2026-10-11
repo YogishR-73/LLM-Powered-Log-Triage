@@ -1,27 +1,18 @@
 """Log intelligence (Member 1): raw logs -> structured events -> semantic groups.
-
 Single-file implementation. Pipeline::
-
     raw log file -> parse -> normalize/template -> LogEvent
                  -> embed unique texts -> cluster -> artifacts (+ optional evaluation)
-
 Sections: SCHEMA (canonical ``LogEvent`` contract), PARSERS, NORMALIZE, INGEST,
 EMBEDDINGS, CLUSTERING, EVALUATION, PIPELINE, CLI.
-
 Usage::
-
     python -m src.log_intelligence run --input app.log --out artifacts/run1 \
         [--labels labels.csv] [--config config.yaml] [--sweep]
     python -m src.log_intelligence schema [--out log_event.schema.json]
-
 Not a root-cause claim: good semantic clustering does not show that the system can
 identify root causes. See ``run_pipeline`` for the artifacts written.
 """
-
 from __future__ import annotations
-
 __version__ = "0.1.0"
-
 import argparse
 import csv
 import hashlib
@@ -35,7 +26,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Final, Iterable, Literal, Mapping, Protocol, Sequence
-
 import numpy as np
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -44,14 +34,11 @@ from sklearn.metrics import (
     homogeneity_completeness_v_measure,
     normalized_mutual_info_score,
 )
-
 # ============================================================================
 # SCHEMA
 # ============================================================================
 SCHEMA_VERSION: Final[int] = 1
-
 SEVERITIES: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARN", "ERROR", "FATAL")
-
 #: Raw level strings seen in common log formats -> canonical severity.
 _SEVERITY_ALIASES: Final[dict[str, str]] = {
     "TRACE": "DEBUG",
@@ -75,20 +62,14 @@ _SEVERITY_ALIASES: Final[dict[str, str]] = {
     "EMERG": "FATAL",
     "EMERGENCY": "FATAL",
 }
-
 ParseStatus = Literal["ok", "partial"]
-
-
 def normalize_severity(raw: str | None) -> str | None:
     """Map a raw level string onto :data:`SEVERITIES`; ``None`` if unknown."""
     if raw is None:
         return None
     return _SEVERITY_ALIASES.get(raw.strip().upper())
-
-
 def make_event_id(source_name: str, line_number: int, raw_line: str) -> str:
     """Deterministic, collision-resistant event ID.
-
     The hash covers the source name, 1-based line number and the raw line text
     (with trailing line terminators removed) so that identical lines at
     different positions get different IDs, and re-ingesting the same file always
@@ -99,25 +80,16 @@ def make_event_id(source_name: str, line_number: int, raw_line: str) -> str:
     payload = f"{source_name}\x1f{line_number}\x1f{raw_line.rstrip(chr(13) + chr(10))}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"evt_{digest}"
-
-
 def make_template_id(template: str) -> str:
     """Stable ID for a normalized message template."""
     digest = hashlib.sha256(template.encode("utf-8")).hexdigest()[:12]
     return f"tpl_{digest}"
-
-
 _EVENT_ID_RE = re.compile(r"^evt_[0-9a-f]{16}$")
 _TEMPLATE_ID_RE = re.compile(r"^tpl_[0-9a-f]{12}$")
-
-
 class LogEvent(BaseModel):
     """One structured log event extracted from one raw log record."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
-
     # ---- fields consumed by src.evidence.EventStore (do not rename) ----
     event_id: str
     timestamp_iso: str | None = None
@@ -127,7 +99,6 @@ class LogEvent(BaseModel):
     template: str | None = None
     source_file: str | None = None
     line_number: int | None = Field(default=None, ge=1, strict=True)
-
     # ---- additional canonical fields ----
     template_id: str | None = None
     timestamp_tz_assumed: bool = False
@@ -137,21 +108,18 @@ class LogEvent(BaseModel):
     parser: str
     parse_status: ParseStatus = "ok"
     parse_warnings: tuple[str, ...] = Field(default_factory=tuple)
-
     @field_validator("event_id")
     @classmethod
     def _check_event_id(cls, value: str) -> str:
         if not _EVENT_ID_RE.match(value):
             raise ValueError("event_id must match evt_<16 hex chars>")
         return value
-
     @field_validator("template_id")
     @classmethod
     def _check_template_id(cls, value: str | None) -> str | None:
         if value is not None and not _TEMPLATE_ID_RE.match(value):
             raise ValueError("template_id must match tpl_<12 hex chars>")
         return value
-
     @field_validator("timestamp_iso")
     @classmethod
     def _check_timestamp(cls, value: str | None) -> str | None:
@@ -164,21 +132,18 @@ class LogEvent(BaseModel):
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("timestamp_iso must include a UTC offset")
         return value
-
     @field_validator("severity")
     @classmethod
     def _check_severity(cls, value: str | None) -> str | None:
         if value is not None and value not in SEVERITIES:
             raise ValueError(f"severity must be one of {SEVERITIES} or None")
         return value
-
     @field_validator("service")
     @classmethod
     def _check_service(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("service must be None or a non-blank string")
         return value
-
     @model_validator(mode="after")
     def _check_consistency(self) -> "LogEvent":
         if self.timestamp_iso is None and self.timestamp_tz_assumed:
@@ -188,39 +153,29 @@ class LogEvent(BaseModel):
         if self.parse_status == "partial" and not self.parse_warnings:
             raise ValueError("partial events must carry at least one parse warning")
         return self
-
     # ------------------------------------------------------------------
     def to_record(self) -> dict[str, Any]:
         """JSON-ready dict with a stable key order (used for JSONL artifacts)."""
         return self.model_dump(mode="json")
-
-
 class ParseFailure(BaseModel):
     """A raw line that could not be turned into an event."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     source_file: str
     line_number: int = Field(ge=1, strict=True)
     raw: str
     reason: str
     parser: str
-
-
 def utc_isoformat(moment: datetime) -> str:
     """Render ``moment`` as an ISO-8601 string in UTC (``+00:00``)."""
     if moment.tzinfo is None:
         raise ValueError("naive datetime; attach a timezone first")
     return moment.astimezone(timezone.utc).isoformat()
-
-
 def export_json_schema() -> dict[str, Any]:
     """JSON Schema for the machine-readable interface contract."""
     schema = LogEvent.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["title"] = "LogEvent"
     return schema
-
 # ============================================================================
 # PARSERS
 # ============================================================================
@@ -228,20 +183,14 @@ _LEVEL_WORDS = (
     "TRACE|FINEST|FINER|FINE|DEBUG|DBG|INFORMATION|INFO|NOTICE|WARNING|WARN|"
     "ERROR|ERR|SEVERE|FATAL|CRITICAL|CRIT|ALERT|EMERGENCY|EMERG"
 )
-
-
 class ParseError(Exception):
     """A line could not be parsed; ``reason`` is a short stable code."""
-
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
-
-
 @dataclass(frozen=True)
 class ParsedRecord:
     """Parser output before normalization / ID assignment."""
-
     message: str
     timestamp_iso: str | None = None
     timestamp_tz_assumed: bool = False
@@ -249,21 +198,14 @@ class ParsedRecord:
     service: str | None = None
     attributes: Mapping[str, str] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
-
-
 class LineParser(Protocol):
     name: str
-
     def parse(self, line: str) -> ParsedRecord: ...
-
-
 # ----------------------------------------------------------------------------
 # Timestamp helpers
 # ----------------------------------------------------------------------------
-
 def parse_iso_like(text: str) -> tuple[str, bool] | None:
     """Parse ISO-8601-ish text. Returns ``(utc_iso, tz_was_assumed)`` or ``None``.
-
     Accepts ``T`` or space separators, ``Z`` / ``+HH:MM`` / ``+HHMM`` offsets and
     comma decimal fractions (log4j style). Invalid calendar values return
     ``None`` rather than raising.
@@ -279,8 +221,6 @@ def parse_iso_like(text: str) -> tuple[str, bool] | None:
     if assumed:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return utc_isoformat(parsed), assumed
-
-
 def parse_with_format(text: str, fmt: str) -> tuple[str, bool] | None:
     """Parse a timezone-less timestamp with ``strptime``; UTC is assumed."""
     try:
@@ -288,8 +228,6 @@ def parse_with_format(text: str, fmt: str) -> tuple[str, bool] | None:
     except ValueError:
         return None
     return utc_isoformat(parsed.replace(tzinfo=timezone.utc)), True
-
-
 def parse_epoch(value: float) -> tuple[str, bool] | None:
     """Parse epoch seconds or milliseconds (auto-detected by magnitude)."""
     if isinstance(value, bool):
@@ -302,8 +240,6 @@ def parse_epoch(value: float) -> tuple[str, bool] | None:
     except (OverflowError, ValueError):
         return None
     return utc_isoformat(moment), False
-
-
 def _finalize(
     *,
     message: str,
@@ -334,32 +270,24 @@ def _finalize(
         attributes=dict(sorted((attributes or {}).items())),
         warnings=tuple(warnings),
     )
-
-
 # ----------------------------------------------------------------------------
 # Regex-based parsers
 # ----------------------------------------------------------------------------
-
 class _RegexParser:
     name = "regex"
     _pattern: re.Pattern[str]
-
     def _match(self, line: str) -> re.Match[str]:
         match = self._pattern.match(line.strip())
         if match is None:
             raise ParseError("no_match")
         return match
-
-
 class ProjectFormatParser(_RegexParser):
     """``YYYY-MM-DD HH:MM:SS [LEVEL] service: message`` (existing project format)."""
-
     name = "project"
     _pattern = re.compile(
         r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"
         r"\[(?P<level>\w+)\]\s+(?P<service>[\w.$-]+):\s*(?P<message>.*)$"
     )
-
     def parse(self, line: str) -> ParsedRecord:
         m = self._match(line)
         return _finalize(
@@ -369,11 +297,8 @@ class ProjectFormatParser(_RegexParser):
             level_raw=m["level"],
             service=m["service"],
         )
-
-
 class GenericIsoParser(_RegexParser):
     """``<ISO timestamp> LEVEL [service[:| -]] message`` (log4j / logback / app logs)."""
-
     name = "generic_iso"
     _pattern = re.compile(
         r"^(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"
@@ -382,7 +307,6 @@ class GenericIsoParser(_RegexParser):
         r"(?:\[?(?P<service>[\w.$/-]+)\]?\s*[:\-]\s+)?(?P<message>.*)$",
         re.IGNORECASE,
     )
-
     def parse(self, line: str) -> ParsedRecord:
         m = self._match(line)
         return _finalize(
@@ -392,17 +316,13 @@ class GenericIsoParser(_RegexParser):
             level_raw=m["level"],
             service=m["service"],
         )
-
-
 class HdfsParser(_RegexParser):
     """Loghub HDFS: ``yymmdd HHMMSS pid LEVEL component: message``."""
-
     name = "hdfs"
     _pattern = re.compile(
         r"^(?P<date>\d{6})\s+(?P<time>\d{6})\s+(?P<pid>\d+)\s+(?P<level>[A-Za-z]+)\s+"
         r"(?P<service>[\w.$-]+):\s*(?P<message>.*)$"
     )
-
     def parse(self, line: str) -> ParsedRecord:
         m = self._match(line)
         ts = parse_with_format(f"{m['date']} {m['time']}", "%y%m%d %H%M%S")
@@ -414,20 +334,15 @@ class HdfsParser(_RegexParser):
             service=m["service"],
             attributes={"pid": m["pid"]},
         )
-
-
 class SyslogParser(_RegexParser):
     """BSD syslog: ``Mon DD HH:MM:SS host service[pid]: message`` (no year in source)."""
-
     name = "syslog"
     _pattern = re.compile(
         r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<time>\d{2}:\d{2}:\d{2})\s+"
         r"(?P<host>\S+)\s+(?P<service>[\w./-]+?)(?:\[(?P<pid>\d+)\])?:\s*(?P<message>.*)$"
     )
-
     def __init__(self, default_year: int = 1970):
         self.default_year = default_year
-
     def parse(self, line: str) -> ParsedRecord:
         m = self._match(line)
         stamp = f"{self.default_year} {m['mon']} {m['day']} {m['time']}"
@@ -444,30 +359,21 @@ class SyslogParser(_RegexParser):
             attributes=attrs,
             extra_warnings=("year_assumed",),
         )
-
-
 # ----------------------------------------------------------------------------
 # JSON lines
 # ----------------------------------------------------------------------------
-
 _TS_KEYS = ("timestamp", "@timestamp", "time", "ts", "datetime")
 _LEVEL_KEYS = ("level", "severity", "lvl", "loglevel", "log_level")
 _SERVICE_KEYS = ("service", "component", "logger", "app", "name")
 _MESSAGE_KEYS = ("message", "msg", "log", "text")
-
-
 def _first_key(obj: Mapping[str, Any], keys: Sequence[str]) -> str | None:
     for key in keys:
         if key in obj:
             return key
     return None
-
-
 class JsonLinesParser:
     """One JSON object per line with common field-name aliases."""
-
     name = "jsonl"
-
     def parse(self, line: str) -> ParsedRecord:
         text = line.strip()
         if not text.startswith("{"):
@@ -478,11 +384,9 @@ class JsonLinesParser:
             raise ParseError("invalid_json") from exc
         if not isinstance(obj, dict):
             raise ParseError("not_json_object")
-
         msg_key = _first_key(obj, _MESSAGE_KEYS)
         if msg_key is None or not isinstance(obj[msg_key], str):
             raise ParseError("missing_message")
-
         ts_key = _first_key(obj, _TS_KEYS)
         ts: tuple[str, bool] | None = None
         if ts_key is not None:
@@ -491,12 +395,10 @@ class JsonLinesParser:
                 ts = parse_iso_like(raw_ts)
             elif isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool):
                 ts = parse_epoch(raw_ts)
-
         level_key = _first_key(obj, _LEVEL_KEYS)
         level_raw = obj[level_key] if level_key and isinstance(obj[level_key], str) else None
         service_key = _first_key(obj, _SERVICE_KEYS)
         service = obj[service_key] if service_key and isinstance(obj[service_key], str) else None
-
         consumed = {k for k in (msg_key, ts_key, level_key, service_key) if k}
         attributes = {
             str(k): str(v)
@@ -511,12 +413,9 @@ class JsonLinesParser:
             service=service,
             attributes=attributes,
         )
-
-
 # ----------------------------------------------------------------------------
 # Registry / auto-detection
 # ----------------------------------------------------------------------------
-
 def build_parsers(default_year: int = 1970) -> dict[str, LineParser]:
     """Return all parsers keyed by name, in auto-detection priority order."""
     parsers: list[LineParser] = [
@@ -527,8 +426,6 @@ def build_parsers(default_year: int = 1970) -> dict[str, LineParser]:
         SyslogParser(default_year=default_year),
     ]
     return {p.name: p for p in parsers}
-
-
 def detect_parser(
     lines: Sequence[str],
     parsers: Mapping[str, LineParser],
@@ -537,7 +434,6 @@ def detect_parser(
     min_success_rate: float = 0.6,
 ) -> str:
     """Pick the parser that succeeds on the largest share of non-blank sample lines.
-
     Ties are broken by registry order, which keeps detection deterministic.
     Raises :class:`ParseError` if no parser reaches ``min_success_rate``.
     """
@@ -559,17 +455,14 @@ def detect_parser(
     if best_rate < min_success_rate:
         raise ParseError(f"no_parser_matched(best_rate={best_rate:.2f})")
     return best_name
-
 # ============================================================================
 # NORMALIZE
 # ============================================================================
 PLACEHOLDER = "<*>"
-
 _WS = re.compile(r"\s+")
 # "blk_<*> blk_<*> blk_<*>" (variable-length lists) -> "blk_<*>" so list length does
 # not create a new template per event.
 _REPEATED = re.compile(r"(\S*<\*>)(?:\s+\1)+")
-
 # (name, regex, replacement builder). Alternatives earlier in the list win ties
 # at the same start position.
 _RULES: list[tuple[str, str, Callable[[re.Match[str]], str]]] = [
@@ -606,50 +499,38 @@ _RULES: list[tuple[str, str, Callable[[re.Match[str]], str]]] = [
         lambda m: PLACEHOLDER,
     ),
 ]
-
 _COMBINED = re.compile(
     "|".join(f"(?P<r{i}>{pattern})" for i, (_, pattern, _) in enumerate(_RULES))
 )
-
-
 def collapse_whitespace(text: str) -> str:
     """Trim and collapse all whitespace runs (including newlines) to one space."""
     return _WS.sub(" ", text).strip()
-
-
 def extract_template(message: str) -> tuple[str, tuple[str, ...]]:
     """Return ``(template, parameters)`` for ``message``.
-
-    ``parameters`` are the masked substrings, in order of appearance, so the
-    original (whitespace-collapsed) message can be reconstructed from the
-    template. An empty message yields an empty template.
+    ``parameters`` are the matched substrings, in order of appearance. Repeated
+    placeholder sequences may be collapsed in the template (for example a list
+    of block IDs), so ``parameters`` is not guaranteed to be one-to-one with the
+    placeholders and must not be used alone to reconstruct the original message.
+    An empty message yields an empty template.
     """
     text = collapse_whitespace(message)
     params: list[str] = []
-
     def _sub(match: re.Match[str]) -> str:
         for i, (_, _, builder) in enumerate(_RULES):
             if match.group(f"r{i}") is not None:
                 params.append(match.group(0))
                 return builder(match)
         raise AssertionError("unreachable: combined pattern matched no rule")
-
     template = _REPEATED.sub(r"\1", _COMBINED.sub(_sub, text))
     return template, tuple(params)
-
 # ============================================================================
 # INGEST
 # ============================================================================
 _CONTINUATION = re.compile(r"^(?:\s+\S|Caused by:|\.\.\. \d+ more|Traceback|at\s)")
-
 MAX_LINE_LENGTH = 1_000_000
-
-
 class IngestConfig(BaseModel):
     """Ingestion settings (part of the reproducible pipeline configuration)."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     parser: str = "auto"
     default_year: int = Field(default=1970, ge=1970, le=2100)
     detect_sample_size: int = Field(default=200, ge=1)
@@ -657,8 +538,6 @@ class IngestConfig(BaseModel):
     attach_continuations: bool = True
     encoding: str = "utf-8"
     encoding_errors: str = "replace"
-
-
 @dataclass
 class IngestResult:
     source_name: str
@@ -668,27 +547,20 @@ class IngestResult:
     total_lines: int = 0
     blank_lines: int = 0
     continuation_lines: int = 0
-
     def accounting_ok(self) -> bool:
         return self.total_lines == (
             self.blank_lines + len(self.failures) + len(self.events) + self.continuation_lines
         )
-
-
 @dataclass
 class _Pending:
     line_number: int
     raw: str
     record: ParsedRecord
     continuations: list[str] = field(default_factory=list)
-
-
 def read_lines(path: str | Path, config: IngestConfig = IngestConfig()) -> list[str]:
     """Read physical lines with universal-newline handling (``\\r\\n`` safe)."""
     with open(path, encoding=config.encoding, errors=config.encoding_errors, newline=None) as fh:
         return [line.rstrip("\n") for line in fh]
-
-
 def _build_event(source_name: str, parser_name: str, pending: _Pending) -> LogEvent:
     rec = pending.record
     first_message = rec.message
@@ -697,14 +569,12 @@ def _build_event(source_name: str, parser_name: str, pending: _Pending) -> LogEv
         message = "\n".join([first_message, *(c.strip() for c in pending.continuations)])
     template, params = extract_template(first_message)
     raw = "\n".join([pending.raw, *pending.continuations])
-
     warnings = list(rec.warnings)
     if "\ufffd" in raw:
         warnings.append("encoding_replaced")
     attributes = dict(rec.attributes)
     if pending.continuations:
         attributes["continuation_lines"] = str(len(pending.continuations))
-
     return LogEvent(
         event_id=make_event_id(source_name, pending.line_number, pending.raw),
         timestamp_iso=rec.timestamp_iso,
@@ -723,8 +593,6 @@ def _build_event(source_name: str, parser_name: str, pending: _Pending) -> LogEv
         parse_status="partial" if warnings else "ok",
         parse_warnings=tuple(warnings),
     )
-
-
 def ingest_lines(
     lines: Iterable[str],
     source_name: str,
@@ -734,7 +602,6 @@ def ingest_lines(
     """Parse already-split physical lines (no trailing newline) into events."""
     all_lines = list(lines)
     registry = parsers or build_parsers(default_year=config.default_year)
-
     if config.parser == "auto":
         try:
             parser_name = detect_parser(
@@ -765,10 +632,8 @@ def ingest_lines(
             raise ValueError(f"Unknown parser {config.parser!r}; choose from {sorted(registry)}")
         parser_name = config.parser
     parser = registry[parser_name]
-
     result = IngestResult(source_name=source_name, parser=parser_name)
     pendings: list[_Pending] = []
-
     for number, line in enumerate(all_lines, start=1):
         result.total_lines += 1
         if not line.strip():
@@ -803,11 +668,8 @@ def ingest_lines(
                 )
             continue
         pendings.append(_Pending(line_number=number, raw=line, record=record))
-
     result.events = [_build_event(source_name, parser_name, p) for p in pendings]
     return result
-
-
 def ingest_file(
     path: str | Path,
     config: IngestConfig = IngestConfig(),
@@ -817,8 +679,6 @@ def ingest_file(
     IDs do not depend on where the file lives on disk."""
     p = Path(path)
     return ingest_lines(read_lines(p, config), source_name or p.name, config)
-
-
 def unique_templates(events: Sequence[LogEvent]) -> list[tuple[str, str, int]]:
     """``(template_id, template, count)`` in order of first appearance."""
     counts: dict[str, list] = {}
@@ -828,20 +688,14 @@ def unique_templates(events: Sequence[LogEvent]) -> list[tuple[str, str, int]]:
         entry = counts.setdefault(ev.template_id, [ev.template, 0])
         entry[1] += 1
     return [(tid, tpl, n) for tid, (tpl, n) in counts.items()]
-
 # ============================================================================
 # EMBEDDINGS
 # ============================================================================
 _CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
-
-
 class EmbeddingError(ValueError):
     """Raised when texts cannot be embedded (e.g. nothing but placeholders)."""
-
-
 class EmbeddingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     backend: Literal["tfidf_svd", "sentence_transformer"] = "tfidf_svd"
     # tfidf_svd
     dim: int = Field(default=32, ge=2)
@@ -855,41 +709,28 @@ class EmbeddingConfig(BaseModel):
     device: str = "cpu"
     # shared
     seed: int = 0
-
-
 class Embedder(Protocol):
     name: str
-
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         """Return an ``(n, d)`` float array with L2-normalised rows."""
         ...
-
     def describe(self) -> dict[str, Any]: ...
-
-
 def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms[norms == 0.0] = 1.0  # zero vectors stay zero instead of becoming NaN
     return matrix / norms
-
-
 def tokenize_for_embedding(text: str) -> str:
     """Lower-case, split camelCase, drop placeholders so only wording remains."""
     text = text.replace("<*>", " ")
     text = _CAMEL.sub(" ", text)
     return text.lower()
-
-
 class TfidfSvdEmbedder:
     name = "tfidf_svd"
-
     def __init__(self, cfg: EmbeddingConfig):
         self.cfg = cfg
-
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         from sklearn.decomposition import TruncatedSVD
         from sklearn.feature_extraction.text import TfidfVectorizer
-
         if len(texts) == 0:
             raise EmbeddingError("no texts to embed")
         vectorizer = TfidfVectorizer(
@@ -904,7 +745,6 @@ class TfidfSvdEmbedder:
             tfidf = vectorizer.fit_transform(list(texts))
         except ValueError as exc:  # "empty vocabulary"
             raise EmbeddingError(f"cannot build vocabulary: {exc}") from exc
-
         n_samples, n_features = tfidf.shape
         max_components = min(self.cfg.dim, n_features - 1, n_samples - 1)
         if max_components >= 2:
@@ -920,7 +760,6 @@ class TfidfSvdEmbedder:
         else:
             dense = tfidf.toarray()
         return _l2_normalize(np.asarray(dense, dtype=np.float64))
-
     def describe(self) -> dict[str, Any]:
         c = self.cfg
         return {
@@ -930,14 +769,10 @@ class TfidfSvdEmbedder:
             "min_df": c.min_df,
             "seed": c.seed,
         }
-
-
 class SentenceTransformerEmbedder:
     name = "sentence_transformer"
-
     def __init__(self, cfg: EmbeddingConfig):
         self.cfg = cfg
-
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         try:
             from sentence_transformers import SentenceTransformer
@@ -958,7 +793,6 @@ class SentenceTransformerEmbedder:
             show_progress_bar=False,
         )
         return _l2_normalize(np.asarray(vectors, dtype=np.float64))
-
     def describe(self) -> dict[str, Any]:
         c = self.cfg
         return {
@@ -968,24 +802,18 @@ class SentenceTransformerEmbedder:
             "batch_size": c.batch_size,
             "device": c.device,
         }
-
-
 def make_embedder(cfg: EmbeddingConfig) -> Embedder:
     if cfg.backend == "tfidf_svd":
         return TfidfSvdEmbedder(cfg)
     if cfg.backend == "sentence_transformer":
         return SentenceTransformerEmbedder(cfg)
     raise ValueError(f"Unknown embedding backend: {cfg.backend}")
-
 # ============================================================================
 # CLUSTERING
 # ============================================================================
 NOISE_CLUSTER_ID = "noise"
-
-
 class ClusteringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     algorithm: Literal["agglomerative", "kmeans", "dbscan"] = "agglomerative"
     # agglomerative: cosine distance cut-off (0 = identical direction, 2 = opposite)
     distance_threshold: float = Field(default=0.5, gt=0.0, le=2.0)
@@ -996,25 +824,18 @@ class ClusteringConfig(BaseModel):
     eps: float = Field(default=0.3, gt=0.0, le=2.0)
     min_samples: int = Field(default=2, ge=1)
     seed: int = 0
-
     @model_validator(mode="after")
     def _kmeans_needs_k(self) -> "ClusteringConfig":
         if self.algorithm == "kmeans" and self.n_clusters is None:
             raise ValueError("kmeans requires n_clusters")
         return self
-
-
 @dataclass(frozen=True)
 class ClusterAssignment:
     """Canonical cluster id per unit; ``NOISE_CLUSTER_ID`` marks DBSCAN noise."""
-
     cluster_ids: tuple[str, ...]
-
     @property
     def n_clusters(self) -> int:
         return len({c for c in self.cluster_ids if c != NOISE_CLUSTER_ID})
-
-
 def _canonicalize(raw_labels: np.ndarray, weights: Sequence[int]) -> tuple[str, ...]:
     """Map arbitrary integer labels to ``cluster_000``... ordered by (-weight, first index)."""
     stats: dict[int, list[int]] = {}
@@ -1027,8 +848,6 @@ def _canonicalize(raw_labels: np.ndarray, weights: Sequence[int]) -> tuple[str, 
     order = sorted(stats, key=lambda lab: (-stats[lab][0], stats[lab][1]))
     names = {lab: f"cluster_{rank:03d}" for rank, lab in enumerate(order)}
     return tuple(NOISE_CLUSTER_ID if int(l) < 0 else names[int(l)] for l in raw_labels)
-
-
 def cluster_embeddings(
     embeddings: np.ndarray,
     weights: Sequence[int],
@@ -1040,10 +859,8 @@ def cluster_embeddings(
         return ClusterAssignment(cluster_ids=())
     if n == 1:
         return ClusterAssignment(cluster_ids=("cluster_000",))
-
     if cfg.algorithm == "agglomerative":
         from sklearn.cluster import AgglomerativeClustering
-
         model = AgglomerativeClustering(
             n_clusters=None,
             distance_threshold=cfg.distance_threshold,
@@ -1053,20 +870,16 @@ def cluster_embeddings(
         raw = model.fit_predict(embeddings)
     elif cfg.algorithm == "kmeans":
         from sklearn.cluster import KMeans
-
         k = min(cfg.n_clusters or 1, n)
         model = KMeans(n_clusters=k, n_init=10, random_state=cfg.seed)
         raw = model.fit_predict(embeddings, sample_weight=np.asarray(weights, dtype=float))
     elif cfg.algorithm == "dbscan":
         from sklearn.cluster import DBSCAN
-
         model = DBSCAN(eps=cfg.eps, min_samples=cfg.min_samples, metric="cosine")
         raw = model.fit_predict(embeddings, sample_weight=np.asarray(weights, dtype=float))
     else:  # pragma: no cover - guarded by the config Literal
         raise ValueError(f"Unknown algorithm {cfg.algorithm}")
     return ClusterAssignment(cluster_ids=_canonicalize(np.asarray(raw), weights))
-
-
 def nearest_to_centroid(
     embeddings: np.ndarray, weights: Sequence[int], members: Sequence[int]
 ) -> int:
@@ -1080,7 +893,6 @@ def nearest_to_centroid(
     sims = pts @ centroid
     best = int(np.argmax(sims))  # argmax returns the first max -> deterministic tie-break
     return members[best]
-
 # ============================================================================
 # EVALUATION
 # ============================================================================
@@ -1090,8 +902,6 @@ CAVEATS = (
     "Template-identity baseline shows how much of the score comes from template extraction alone.",
     "Ground-truth labels were never used to fit embeddings or clusters.",
 )
-
-
 def load_labels_csv(
     path: str | Path, line_column: str = "line_number", label_column: str = "event_id"
 ) -> dict[int, str]:
@@ -1111,20 +921,14 @@ def load_labels_csv(
                 raise ValueError(f"duplicate label for line {line}")
             labels[line] = row[label_column]
     return labels
-
-
 def purity(clusters: Sequence[str], labels: Sequence[str]) -> float:
     by_cluster: dict[str, Counter] = defaultdict(Counter)
     for c, l in zip(clusters, labels):
         by_cluster[c][l] += 1
     return sum(max(cnt.values()) for cnt in by_cluster.values()) / len(labels) if labels else 0.0
-
-
 def _singleton_noise(clusters: Sequence[str]) -> list[str]:
     """Score each noise point as its own cluster (the conservative choice)."""
     return [f"noise_{i}" if c == NOISE_CLUSTER_ID else c for i, c in enumerate(clusters)]
-
-
 def score_partition(clusters: Sequence[str], labels: Sequence[str]) -> dict[str, Any]:
     if len(clusters) != len(labels):
         raise ValueError("clusters and labels must have equal length")
@@ -1132,6 +936,13 @@ def score_partition(clusters: Sequence[str], labels: Sequence[str]) -> dict[str,
         return {"n_events": 0}
     cl = _singleton_noise(clusters)
     hom, comp, v = homogeneity_completeness_v_measure(labels, cl)
+    non_noise = [(cluster, label) for cluster, label in zip(clusters, labels) if cluster != NOISE_CLUSTER_ID]
+    noise_coverage = len(non_noise) / len(labels)
+    non_noise_purity = (
+        purity([cluster for cluster, _ in non_noise], [label for _, label in non_noise])
+        if non_noise
+        else None
+    )
     return {
         "n_events": len(labels),
         "n_clusters": len(set(cl)),
@@ -1141,10 +952,12 @@ def score_partition(clusters: Sequence[str], labels: Sequence[str]) -> dict[str,
         "homogeneity": round(float(hom), 6),
         "completeness": round(float(comp), 6),
         "v_measure": round(float(v), 6),
+        # Keep the prior singleton-noise purity for compatibility, and report
+        # coverage/non-noise purity so readers can see how noise affects it.
         "purity": round(float(purity(cl, labels)), 6),
+        "noise_coverage": round(float(noise_coverage), 6),
+        "purity_excluding_noise": round(float(non_noise_purity), 6) if non_noise_purity is not None else None,
     }
-
-
 def evaluate_events(
     event_line_numbers: Sequence[int | None],
     cluster_ids: Sequence[str],
@@ -1159,15 +972,12 @@ def evaluate_events(
     labels = [labels_by_line[event_line_numbers[i]] for i in idx]  # type: ignore[index]
     clusters = [cluster_ids[i] for i in idx]
     templates = [template_ids[i] or f"none_{i}" for i in idx]
-
     rng = random.Random(seed)
     shuffled = clusters[:]
     rng.shuffle(shuffled)
-
     per_cluster: dict[str, Counter] = defaultdict(Counter)
     for c, l in zip(clusters, labels):
         per_cluster[c][l] += 1
-
     return {
         "coverage": {
             "n_events": len(event_line_numbers),
@@ -1188,44 +998,32 @@ def evaluate_events(
         },
         "caveats": list(CAVEATS),
     }
-
 # ============================================================================
 # PIPELINE
 # ============================================================================
 class PipelineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     ingest: IngestConfig = Field(default_factory=IngestConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
     #: Which event text is embedded: the masked ``template`` or the full ``message``.
     text_field: Literal["template", "message"] = "template"
     example_events_per_cluster: int = Field(default=3, ge=0)
-
-
 def canonical_json(obj: Any, *, indent: int | None = 2) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=indent, allow_nan=False) + "\n"
-
-
 def config_hash(config: PipelineConfig) -> str:
     payload = json.dumps(config.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
-
-
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
 def _text_for(event: LogEvent, field: str) -> str:
     if field == "template" and event.template:
         return event.template
     return " ".join(event.message.split())
-
-
 def cluster_events(
     events: list[LogEvent], config: PipelineConfig
 ) -> tuple[list[str], dict[str, Any], np.ndarray, list[str]]:
@@ -1243,7 +1041,6 @@ def cluster_events(
         unit_events[unit_index[text]].append(i)
         event_unit.append(unit_index[text])
     weights = [len(m) for m in unit_events]
-
     embedder = make_embedder(config.embedding)
     skipped: str | None = None
     if not events:
@@ -1258,13 +1055,10 @@ def cluster_events(
             skipped = f"embedding_failed: {exc}"
             embeddings = np.zeros((len(unit_texts), 0))
             assignment_ids = tuple("cluster_000" for _ in unit_texts)
-
     event_clusters = [assignment_ids[u] for u in event_unit]
-
     members: dict[str, list[int]] = {}
     for u, cid in enumerate(assignment_ids):
         members.setdefault(cid, []).append(u)
-
     summaries = []
     for cid in sorted(members, key=lambda c: (c == NOISE_CLUSTER_ID, c)):
         units = members[cid]
@@ -1290,7 +1084,6 @@ def cluster_events(
                 ],
             }
         )
-
     doc = {
         "schema_version": SCHEMA_VERSION,
         "text_field": config.text_field,
@@ -1308,13 +1101,9 @@ def cluster_events(
         ],
     }
     return event_clusters, doc, embeddings, unit_texts
-
-
 def _write(path: Path, text: str) -> None:
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
-
-
 def run_pipeline(
     input_path: str | Path,
     out_dir: str | Path,
@@ -1328,17 +1117,19 @@ def run_pipeline(
     """Run the whole pipeline and write artifacts; returns the run manifest."""
     in_path, out = Path(input_path), Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-
+    evaluation_path = out / "evaluation.json"
+    # Prevent metrics from a previous labelled run being presented as current
+    # when this run is not supplied with labels.
+    if labels_path is None:
+        evaluation_path.unlink(missing_ok=True)
     result: IngestResult = ingest_file(in_path, config.ingest, source_name=source_name)
     events = result.events
     event_clusters, clusters_doc, embeddings, _ = cluster_events(events, config)
-
     _write(out / "events.jsonl", "".join(canonical_json(e.to_record(), indent=None) for e in events))
     _write(
         out / "parse_failures.jsonl",
         "".join(canonical_json(f.model_dump(mode="json"), indent=None) for f in result.failures),
     )
-
     tpl_counts: dict[str, dict[str, Any]] = {}
     for ev, cid in zip(events, event_clusters):
         if ev.template_id is None:
@@ -1352,7 +1143,6 @@ def run_pipeline(
         {**t, "cluster_ids": sorted(t["cluster_ids"])} for t in tpl_counts.values()
     ]
     _write(out / "templates.json", canonical_json({"schema_version": SCHEMA_VERSION, "templates": templates}))
-
     np.save(out / "template_embeddings.npy", np.round(embeddings, 6))
     _write(out / "clusters.json", canonical_json(clusters_doc))
     _write(
@@ -1364,23 +1154,37 @@ def run_pipeline(
             for e, c in zip(events, event_clusters)
         ),
     )
-
     artifacts = ["events.jsonl", "parse_failures.jsonl", "templates.json",
                  "template_embeddings.npy", "clusters.json", "event_clusters.jsonl"]
-
     evaluation = None
     if labels_path is not None:
         labels = load_labels_csv(labels_path, label_line_column, label_column)
-        evaluation = evaluate_events(
-            [e.line_number for e in events],
-            event_clusters,
-            [e.template_id for e in events],
-            labels,
-            seed=config.clustering.seed,
-        )
+        if str(clusters_doc.get("skipped") or "").startswith("embedding_failed"):
+            labelled_count = sum(1 for event in events if event.line_number in labels)
+            evaluation = {
+                "schema_version": SCHEMA_VERSION,
+                "status": "skipped",
+                "reason": clusters_doc["skipped"],
+                "coverage": {
+                    "n_events": len(events),
+                    "n_labelled": labelled_count,
+                    "fraction_labelled": round(labelled_count / len(events), 6) if events else 0.0,
+                },
+                "caveats": [
+                    "Clustering metrics were not computed because embedding failed; the fallback cluster assignment is not an evaluated clustering result.",
+                    "Semantic clustering performance is not evidence of root-cause localization.",
+                ],
+            }
+        else:
+            evaluation = evaluate_events(
+                [e.line_number for e in events],
+                event_clusters,
+                [e.template_id for e in events],
+                labels,
+                seed=config.clustering.seed,
+            )
         _write(out / "evaluation.json", canonical_json(evaluation))
         artifacts.append("evaluation.json")
-
     import sklearn
     manifest = {
         "pipeline_version": __version__,
@@ -1414,8 +1218,6 @@ def run_pipeline(
     }
     _write(out / "run_manifest.json", canonical_json(manifest))
     return manifest
-
-
 def run_sweep(
     input_path: str | Path,
     labels_path: str | Path,
@@ -1428,7 +1230,6 @@ def run_sweep(
     source_name: str | None = None,
 ) -> dict[str, Any]:
     """Sensitivity analysis over distance threshold and embedded text field.
-
     Reported in full so that the default configuration is not presented as the
     best of many tries. ``message`` mode embeds the raw message (variables
     included), a harder setting that does not benefit from template masking.
@@ -1458,7 +1259,6 @@ def run_sweep(
                 {"text_field": text_field, "distance_threshold": th, **ev["clustering"]}
             )
     return {"schema_version": SCHEMA_VERSION, "rows": rows}
-
 # ============================================================================
 # CLI
 # ============================================================================
@@ -1468,12 +1268,9 @@ def load_config(path: str | None) -> PipelineConfig:
     with open(path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
     return PipelineConfig.model_validate(raw)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="log_intelligence", description="Log intelligence CLI")
     sub = parser.add_subparsers(dest="command", required=True)
-
     run = sub.add_parser("run", help="raw log -> events -> clusters (+ evaluation)")
     run.add_argument("--input", required=True)
     run.add_argument("--out", required=True)
@@ -1482,12 +1279,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--label-line-column", default="line_number")
     run.add_argument("--label-column", default="event_id")
     run.add_argument("--sweep", action="store_true", help="also write sweep.json (needs --labels)")
-
     schema = sub.add_parser("schema", help="print the LogEvent JSON Schema")
     schema.add_argument("--out")
-
     args = parser.parse_args(argv)
-
     if args.command == "schema":
         text = canonical_json(export_json_schema())
         if args.out:
@@ -1496,7 +1290,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sys.stdout.write(text)
         return 0
-
     config = load_config(args.config)
     manifest = run_pipeline(
         args.input,
@@ -1514,7 +1307,6 @@ def main(argv: list[str] | None = None) -> int:
             label_line_column=args.label_line_column, label_column=args.label_column,
         )
         Path(args.out, "sweep.json").write_text(canonical_json(sweep), encoding="utf-8")
-
     ing = manifest["ingest"]
     print(
         f"parser={ing['parser']} lines={ing['total_lines']} events={ing['n_events']} "
@@ -1524,18 +1316,15 @@ def main(argv: list[str] | None = None) -> int:
     eval_path = Path(args.out, "evaluation.json")
     if eval_path.exists():
         ev = json.loads(eval_path.read_text(encoding="utf-8"))
-        c, t = ev["clustering"], ev["baselines"]["template_identity"]
-        print(
-            f"ARI={c['adjusted_rand_index']} NMI={c['normalized_mutual_info']} "
-            f"homog={c['homogeneity']} compl={c['completeness']} purity={c['purity']} "
-            f"(template-identity ARI={t['adjusted_rand_index']})"
-        )
+        if ev.get("status") == "skipped":
+            print(f"evaluation_skipped={ev.get('reason', 'unspecified')}")
+        else:
+            c, t = ev["clustering"], ev["baselines"]["template_identity"]
+            print(
+                f"ARI={c['adjusted_rand_index']} NMI={c['normalized_mutual_info']} "
+                f"homog={c['homogeneity']} compl={c['completeness']} purity={c['purity']} "
+                f"(template-identity ARI={t['adjusted_rand_index']})"
+            )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 if __name__ == "__main__":
     raise SystemExit(main())
